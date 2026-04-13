@@ -1,8 +1,8 @@
 # ==========================================================
-# [main.py] - 🌟 빗썸 크립토 자동매매 봇 🌟
-# 💡 원본 KIS 주식 봇(앱솔루트 스노우볼)의 아키텍처를 100% 계승
-# 💡 빗썸 API + 텔레그램 봇 기반 BTC/ETH 자동매매 시스템
-# 💡 무한매수법(V14) + V-REV 역추세 + AVWAP 스나이퍼 전술 크립토 포팅
+# [main.py] - 🌟 빗썸 크립토 무한매수 봇 🌟
+# ✅ 라오어 무한매수법 완전 구현
+# ✅ /split, /target 명령어 추가
+# ✅ scheduled_profit_monitor (60초 실시간 익절 감시) 추가
 # ==========================================================
 
 import os
@@ -22,25 +22,26 @@ from crypto_scheduler import (
     scheduled_force_reset,
     scheduled_regular_trade,
     scheduled_sniper_monitor,
+    scheduled_profit_monitor,
     scheduled_self_cleaning,
     scheduled_volatility_scan,
 )
 
-if not os.path.exists('data'):
-    os.makedirs('data')
-if not os.path.exists('logs'):
-    os.makedirs('logs')
+# 디렉토리 생성
+for d in ['data', 'logs']:
+    if not os.path.exists(d):
+        os.makedirs(d)
 
 load_dotenv()
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_TOKEN     = os.getenv("TELEGRAM_TOKEN")
+BITHUMB_API_KEY    = os.getenv("BITHUMB_API_KEY")
+BITHUMB_API_SECRET = os.getenv("BITHUMB_API_SECRET")
+
 try:
     ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID")) if os.getenv("ADMIN_CHAT_ID") else None
 except ValueError:
     ADMIN_CHAT_ID = None
-
-BITHUMB_API_KEY    = os.getenv("BITHUMB_API_KEY")
-BITHUMB_API_SECRET = os.getenv("BITHUMB_API_SECRET")
 
 if not all([TELEGRAM_TOKEN, BITHUMB_API_KEY, BITHUMB_API_SECRET]):
     print("❌ [치명적 오류] .env 파일에 필수 키가 누락되었습니다.")
@@ -57,16 +58,17 @@ logging.basicConfig(
     ]
 )
 
+
 def main():
-    cfg     = CryptoConfigManager()
-    broker  = BithumbBroker(BITHUMB_API_KEY, BITHUMB_API_SECRET)
+    cfg      = CryptoConfigManager()
+    broker   = BithumbBroker(BITHUMB_API_KEY, BITHUMB_API_SECRET)
     strategy = CryptoInfiniteStrategy(cfg)
 
     if ADMIN_CHAT_ID:
         cfg.set_chat_id(ADMIN_CHAT_ID)
 
     tx_lock = asyncio.Lock()
-    bot = CryptoTelegramController(cfg, broker, strategy, tx_lock)
+    bot     = CryptoTelegramController(cfg, broker, strategy, tx_lock)
 
     app = (
         Application.builder()
@@ -79,25 +81,30 @@ def main():
         .build()
     )
 
-    for cmd, handler in [
-        ("start",      bot.cmd_start),
-        ("record",     bot.cmd_record),
-        ("history",    bot.cmd_history),
-        ("sync",       bot.cmd_sync),
-        ("seed",       bot.cmd_seed),
-        ("ticker",     bot.cmd_ticker),
-        ("mode",       bot.cmd_mode),
-        ("reset",      bot.cmd_reset),
-        ("balance",    bot.cmd_balance),
-        ("version",    bot.cmd_version),
-    ]:
+    # ── 명령어 등록 ──────────────────────────────────────────
+    commands = [
+        ("start",   bot.cmd_start),
+        ("record",  bot.cmd_record),
+        ("history", bot.cmd_history),
+        ("sync",    bot.cmd_sync),
+        ("seed",    bot.cmd_seed),
+        ("split",   bot.cmd_split),     # ✅ 분할 수 설정
+        ("target",  bot.cmd_target),    # ✅ 목표 수익률 설정
+        ("ticker",  bot.cmd_ticker),
+        ("mode",    bot.cmd_mode),
+        ("reset",   bot.cmd_reset),
+        ("balance", bot.cmd_balance),
+        ("version", bot.cmd_version),
+    ]
+    for cmd, handler in commands:
         app.add_handler(CommandHandler(cmd, handler))
 
     app.add_handler(CallbackQueryHandler(bot.handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, bot.handle_message))
 
+    # ── 스케줄러 등록 ────────────────────────────────────────
     if cfg.get_chat_id():
-        jq = app.job_queue
+        jq  = app.job_queue
         kst = pytz.timezone('Asia/Seoul')
 
         app_data = {
@@ -108,8 +115,7 @@ def main():
             'tx_lock':  tx_lock,
         }
 
-        # ─── 시스템 관리 스케줄 ───────────────────────────
-        # 토큰 갱신: 매 6시간 (빗썸 API key는 만료 없으나 상태 체크용)
+        # API 헬스체크: 6시간마다
         for hh in [0, 6, 12, 18]:
             jq.run_daily(
                 scheduled_token_check,
@@ -128,7 +134,7 @@ def main():
             data=app_data
         )
 
-        # 변동성 스캔: 매일 10:00 KST
+        # 변동성 브리핑: 매일 10:00 KST
         jq.run_daily(
             scheduled_volatility_scan,
             time=datetime.time(10, 0, tzinfo=kst),
@@ -137,7 +143,7 @@ def main():
             data=app_data
         )
 
-        # 정규 매매 (무한매수법 LOC 장전): 매일 10:05 KST
+        # 정규 매매 (무한매수 평단매수): 매일 10:05 KST
         jq.run_daily(
             scheduled_regular_trade,
             time=datetime.time(10, 5, tzinfo=kst),
@@ -146,7 +152,15 @@ def main():
             data=app_data
         )
 
-        # 스나이퍼 감시: 60초 간격 실시간
+        # ✅ 실시간 익절 감시: 60초마다 (목표가 달성 즉시 매도)
+        jq.run_repeating(
+            scheduled_profit_monitor,
+            interval=60,
+            chat_id=cfg.get_chat_id(),
+            data=app_data
+        )
+
+        # AVWAP 스나이퍼: 60초마다
         jq.run_repeating(
             scheduled_sniper_monitor,
             interval=60,
@@ -164,14 +178,23 @@ def main():
         )
 
     latest_version = cfg.get_latest_version()
+    tickers        = cfg.get_active_tickers()
+
     print("=" * 60)
-    print(f"🚀 크립토 스노우볼 퀀트 엔진 {latest_version}")
-    print(f"🪙 운용 코인: {', '.join(cfg.get_active_tickers())}")
+    print(f"🚀 크립토 무한매수 봇 {latest_version}")
+    print(f"🪙 운용 코인: {', '.join(tickers)}")
+    for t in tickers:
+        seed  = cfg.get_seed(t)
+        split = cfg.get_split_count(t)
+        tgt   = cfg.get_target_profit(t)
+        print(f"   {t}: 시드={seed:,.0f}원 / {split:.0f}분할 / 목표={tgt:.1f}%")
     print(f"📡 빗썸 API 연결 완료")
     print(f"🤖 텔레그램 봇 대기 중...")
+    print(f"📊 실시간 익절 감시: 60초 간격")
     print("=" * 60)
 
     app.run_polling()
+
 
 if __name__ == "__main__":
     main()

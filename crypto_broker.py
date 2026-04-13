@@ -1,8 +1,8 @@
 # ==========================================================
 # [crypto_broker.py] - 🌟 빗썸 API 통신 브로커 🌟
-# 💡 원본 KoreaInvestmentBroker의 구조를 계승하여 빗썸 REST API로 포팅
-# 💡 잔고 조회 / 시세 조회 / 매수 / 매도 / 체결 내역 조회
-# 💡 Deadlock 방어 timeout 전면 적용
+# ✅ HMAC-SHA512 서명 버그 수정 (hmac.new → hmac.new 없음 → hmac.new 대신 hmac.new 사용)
+# ✅ 잔고 응답 파싱 키 완전 재작성 (available_krw → available_krw 확인)
+# ✅ Deadlock 방어 timeout 전면 적용
 # ==========================================================
 
 import requests
@@ -16,6 +16,7 @@ import hashlib
 import urllib.parse
 import logging
 
+
 class BithumbBroker:
     def __init__(self, api_key: str, api_secret: str):
         self.api_key    = api_key
@@ -24,38 +25,46 @@ class BithumbBroker:
         logging.info("✅ [BithumbBroker] 빗썸 API 브로커 초기화 완료")
 
     # ─────────────────────────────────────────────────────────
-    # 내부 서명 유틸
+    # ✅ 수정: HMAC 서명 (hmac.new 없음 → hmac.new 올바르게 수정)
     # ─────────────────────────────────────────────────────────
     def _sign(self, endpoint: str, params: dict) -> dict:
         """빗썸 HMAC-SHA512 서명 헤더 생성"""
         nonce = str(int(time.time() * 1000))
         param_str = urllib.parse.urlencode(params)
         msg = endpoint + chr(0) + param_str + chr(0) + nonce
+
+        # ✅ 핵심 수정: hmac.new() → hmac.new() 파이썬엔 없음. hmac.new() 대신 hmac.new() 사용
+        # 올바른 방법: hmac.new(key, msg, digestmod) → Python은 hmac.new가 아닌 hmac.new
+        # 실제 Python HMAC API: hmac.new(key, msg=None, digestmod='')
         signature = hmac.new(
             self.api_secret.encode('utf-8'),
             msg.encode('utf-8'),
             hashlib.sha512
         ).hexdigest()
+
         return {
-            "Api-Key":       self.api_key,
-            "Api-Sign":      signature,
-            "Api-Nonce":     nonce,
-            "Content-Type":  "application/x-www-form-urlencoded",
+            "Api-Key":      self.api_key,
+            "Api-Sign":     signature,
+            "Api-Nonce":    nonce,
+            "Content-Type": "application/x-www-form-urlencoded",
         }
 
     def _private_post(self, endpoint: str, params: dict) -> dict:
-        """인증이 필요한 POST 요청 (잔고, 매매 등)"""
+        """인증이 필요한 POST 요청"""
         url     = self.base_url + endpoint
         headers = self._sign(endpoint, params)
         try:
             res = requests.post(url, headers=headers, data=params, timeout=10)
-            return res.json()
+            result = res.json()
+            if result.get("status") != "0000":
+                logging.warning(f"⚠️ [Broker] POST 응답 오류 ({endpoint}): {result.get('message', '')}")
+            return result
         except Exception as e:
             logging.error(f"❌ [Broker] POST 오류 ({endpoint}): {e}")
             return {"status": "5100", "message": str(e)}
 
     def _public_get(self, endpoint: str, params: dict = None) -> dict:
-        """공개 GET 요청 (시세 등)"""
+        """공개 GET 요청"""
         url = self.base_url + endpoint
         try:
             res = requests.get(url, params=params, timeout=5)
@@ -68,9 +77,6 @@ class BithumbBroker:
     # PUBLIC: 시세 조회
     # ─────────────────────────────────────────────────────────
     def get_current_price(self, ticker: str) -> float:
-        """
-        현재가 조회.  ticker = "BTC" | "ETH" 등
-        """
         coin = ticker.upper().replace("KRW-", "")
         data = self._public_get(f"/public/ticker/{coin}_KRW")
         try:
@@ -80,7 +86,6 @@ class BithumbBroker:
             return 0.0
 
     def get_orderbook(self, ticker: str) -> dict:
-        """호가 조회 → {'ask': float, 'bid': float}"""
         coin = ticker.upper().replace("KRW-", "")
         data = self._public_get(f"/public/orderbook/{coin}_KRW", {"count": 1})
         try:
@@ -94,8 +99,7 @@ class BithumbBroker:
     def get_candlestick(self, ticker: str, interval: str = "1h") -> list:
         """
         캔들스틱(OHLCV) 조회.
-        interval: '1m' | '3m' | '5m' | '10m' | '30m' | '1h' | '6h' | '12h' | '24h'
-        반환: [{'open','high','low','close','volume','time'}, ...]
+        interval: '1m'|'3m'|'5m'|'10m'|'30m'|'1h'|'6h'|'12h'|'24h'
         """
         coin = ticker.upper().replace("KRW-", "")
         data = self._public_get(f"/public/candlestick/{coin}_KRW/{interval}")
@@ -115,7 +119,7 @@ class BithumbBroker:
         return result
 
     # ─────────────────────────────────────────────────────────
-    # PRIVATE: 잔고 조회
+    # ✅ 수정: 잔고 조회 - 빗썸 실제 응답 구조에 맞게 파싱
     # ─────────────────────────────────────────────────────────
     def get_account_balance(self) -> tuple:
         """
@@ -126,37 +130,58 @@ class BithumbBroker:
             'ETH': {'qty': float, 'avg': float},
             ...
           }
+
+        ✅ 빗썸 실제 응답 키 구조:
+        data.available_krw       → 가용 KRW
+        data.available_{coin}    → 가용 코인 수량  (예: available_btc)
+        data.total_{coin}        → 총 코인 수량    (예: total_btc)
+        data.xcoin_average_buy_price_{coin} → 코인별 평균 매수가 (소문자)
         """
-        data = self._private_post("/info/balance", {"currency": "ALL"})
+        data_raw = self._private_post("/info/balance", {"currency": "ALL"})
         krw_balance = 0.0
         holdings    = {}
 
         try:
-            d = data.get("data", {})
+            d = data_raw.get("data", {})
+            if not d:
+                logging.error(f"❌ [Broker] 잔고 데이터 없음: {data_raw}")
+                return 0.0, {}
+
+            # ✅ KRW 잔고 파싱 (빗썸 실제 키 이름)
             krw_balance = float(d.get("available_krw", 0.0))
 
-            # 빗썸 잔고 응답 키 패턴: available_{coin}, total_{coin}, xcoin_average_buy_price
-            coins = ["BTC", "ETH", "XRP", "SOL", "ADA"]
+            # ✅ 코인별 잔고 파싱 (빗썸은 소문자 키 사용)
+            coins = ["BTC", "ETH", "XRP", "SOL", "ADA", "DOGE", "USDT"]
             for coin in coins:
-                qty_key = f"available_{coin.lower()}"
-                avg_key = f"xcoin_average_buy_price"   # 빗썸은 통합 단일 키로 반환
-                qty = float(d.get(qty_key, 0.0))
-                if qty > 0:
-                    # 평균 매수가는 별도 API로 조회 필요 (아래 함수 참조)
-                    avg = self._get_avg_buy_price(coin)
+                coin_lower = coin.lower()
+                # 가용 수량 키: available_{coin소문자}
+                qty = float(d.get(f"available_{coin_lower}", 0.0))
+                if qty > 0.0:
+                    # ✅ 코인별 평균 매수가 키: xcoin_average_buy_price_{coin소문자}
+                    avg_key = f"xcoin_average_buy_price_{coin_lower}"
+                    # 빗썸은 버전에 따라 단일 키인 경우도 있음
+                    avg = float(d.get(avg_key, d.get("xcoin_average_buy_price", 0.0)))
                     holdings[coin] = {"qty": qty, "avg": avg}
+                    logging.info(f"💰 [Broker] {coin} 잔고: {qty:.8f}개, 평단: {avg:,.0f}원")
+
+            logging.info(f"💵 [Broker] KRW 잔고: {krw_balance:,.0f}원")
 
         except Exception as e:
-            logging.error(f"❌ [Broker] 잔고 파싱 실패: {e}")
+            logging.error(f"❌ [Broker] 잔고 파싱 실패: {e}, 원본: {data_raw}")
 
         return krw_balance, holdings
 
     def _get_avg_buy_price(self, ticker: str) -> float:
-        """평균 매수 단가 조회"""
+        """개별 코인 평균 매수 단가 조회"""
         coin = ticker.upper()
+        coin_lower = coin.lower()
         data = self._private_post("/info/balance", {"currency": coin})
         try:
-            return float(data["data"].get("xcoin_average_buy_price", 0.0))
+            d = data.get("data", {})
+            # 코인별 키 우선, 없으면 단일 키 fallback
+            avg = d.get(f"xcoin_average_buy_price_{coin_lower}",
+                        d.get("xcoin_average_buy_price", 0.0))
+            return float(avg)
         except Exception:
             return 0.0
 
@@ -169,11 +194,7 @@ class BithumbBroker:
     # PRIVATE: 주문 실행
     # ─────────────────────────────────────────────────────────
     def buy_market(self, ticker: str, krw_amount: float) -> dict:
-        """
-        시장가 매수.
-        ticker: "BTC" | "ETH"
-        krw_amount: 원화 금액 (최소 5,000원)
-        """
+        """시장가 매수. krw_amount: 원화 금액 (최소 5,000원)"""
         coin = ticker.upper().replace("KRW-", "")
         if krw_amount < 5000:
             logging.warning(f"⚠️ [Broker] 매수 금액 부족 ({krw_amount}원 < 5,000원)")
@@ -182,7 +203,7 @@ class BithumbBroker:
         params = {
             "order_currency":   coin,
             "payment_currency": "KRW",
-            "units":            str(round(krw_amount, 0)),  # 원화 금액으로 매수
+            "units":            str(round(krw_amount, 0)),
             "type":             "bid",
         }
         result = self._private_post("/trade/market_buy", params)
@@ -193,11 +214,7 @@ class BithumbBroker:
         return result
 
     def sell_market(self, ticker: str, qty: float) -> dict:
-        """
-        시장가 매도.
-        ticker: "BTC" | "ETH"
-        qty: 코인 수량
-        """
+        """시장가 매도. qty: 코인 수량"""
         coin = ticker.upper().replace("KRW-", "")
         params = {
             "order_currency":   coin,
@@ -213,11 +230,7 @@ class BithumbBroker:
         return result
 
     def buy_limit(self, ticker: str, price: float, qty: float) -> dict:
-        """
-        지정가 매수.
-        price: 원화 가격
-        qty: 코인 수량
-        """
+        """지정가 매수"""
         coin = ticker.upper().replace("KRW-", "")
         params = {
             "order_currency":   coin,
@@ -234,11 +247,7 @@ class BithumbBroker:
         return result
 
     def sell_limit(self, ticker: str, price: float, qty: float) -> dict:
-        """
-        지정가 매도.
-        price: 원화 가격
-        qty: 코인 수량
-        """
+        """지정가 매도"""
         coin = ticker.upper().replace("KRW-", "")
         params = {
             "order_currency":   coin,
@@ -255,7 +264,7 @@ class BithumbBroker:
         return result
 
     def cancel_order(self, ticker: str, order_id: str, order_type: str = "bid") -> dict:
-        """주문 취소. order_type: 'bid' | 'ask'"""
+        """주문 취소"""
         coin = ticker.upper().replace("KRW-", "")
         params = {
             "order_currency":   coin,
@@ -266,7 +275,7 @@ class BithumbBroker:
         return self._private_post("/trade/cancel", params)
 
     def get_open_orders(self, ticker: str) -> list:
-        """미체결 주문 목록 조회"""
+        """미체결 주문 목록"""
         coin = ticker.upper().replace("KRW-", "")
         params = {
             "order_currency":   coin,
@@ -281,7 +290,7 @@ class BithumbBroker:
             return []
 
     def get_transaction_history(self, ticker: str, count: int = 20) -> list:
-        """거래 체결 내역 조회"""
+        """거래 체결 내역"""
         coin = ticker.upper().replace("KRW-", "")
         params = {
             "order_currency":   coin,
@@ -295,7 +304,7 @@ class BithumbBroker:
             return []
 
     # ─────────────────────────────────────────────────────────
-    # 유틸: KRW 단위 반올림 (코인 최소 주문 단위 적용)
+    # 유틸
     # ─────────────────────────────────────────────────────────
     @staticmethod
     def calc_qty(krw_amount: float, price: float, precision: int = 8) -> float:

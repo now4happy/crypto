@@ -1,7 +1,7 @@
 # ==========================================================
 # [crypto_config.py] - 🌟 크립토 설정 및 장부 관리자 🌟
-# 💡 원본 ConfigManager 구조를 계승하여 크립토 환경으로 포팅
-# 💡 BTC/ETH 장부, 시드, 분할 설정, 버전, 잠금 상태 관리
+# ✅ 버전 업데이트
+# ✅ get_position 수정: 매도 시 투자금 비율 계산 정확도 개선
 # ==========================================================
 
 import json
@@ -13,29 +13,31 @@ import tempfile
 
 VERSION_HISTORY = [
     "V1.0 [2026] 빗썸 크립토 봇 초기 릴리즈 - BTC/ETH 무한매수법 + AVWAP 스나이퍼",
+    "V1.1 [2026] 라오어 무한매수법 완전 구현 - 진행도T, 별값매수/매도, 좁줍, 전/후반전",
+    "V1.2 [2026] 빗썸 API 잔고 파싱 버그 수정, 실시간 익절 모니터 추가, /split /target 명령어",
+    "V2.0 [2026] 전면 재설계 - 라오어 무한매수법 완전판, API 잔고 버그 수정, 실시간 익절 감시",
 ]
+
 
 class CryptoConfigManager:
     def __init__(self):
         self.FILES = {
-            "CHAT_ID":       "data/chat_id.dat",
-            "LEDGER":        "data/ledger.json",
-            "HISTORY":       "data/history.json",
-            "SPLIT_CFG":     "data/split_config.json",
-            "TICKER":        "data/active_tickers.json",
-            "SEED_CFG":      "data/seed_config.json",
-            "VERSION_CFG":   "data/version_config.json",
-            "REVERSE_CFG":   "data/reverse_config.json",
-            "LOCKS":         "data/trade_locks.json",
-            "AVWAP_CFG":     "data/avwap_hybrid.json",
-            "QUEUE_LEDGER":  "data/queue_ledger.json",
+            "CHAT_ID":      "data/chat_id.dat",
+            "LEDGER":       "data/ledger.json",
+            "HISTORY":      "data/history.json",
+            "SPLIT_CFG":    "data/split_config.json",
+            "TICKER":       "data/active_tickers.json",
+            "SEED_CFG":     "data/seed_config.json",
+            "VERSION_CFG":  "data/version_config.json",
+            "REVERSE_CFG":  "data/reverse_config.json",
+            "LOCKS":        "data/trade_locks.json",
+            "AVWAP_CFG":    "data/avwap_hybrid.json",
+            "QUEUE_LEDGER": "data/queue_ledger.json",
         }
 
-        # ── 기본값 (코인 단위는 원화 기준 시드)
-        self.DEFAULT_SEED     = {"BTC": 500000.0, "ETH": 500000.0}   # 50만원
-        self.DEFAULT_SPLIT    = {"BTC": 20.0,     "ETH": 20.0}       # 20분할
-        self.DEFAULT_TARGET   = {"BTC": 8.0,      "ETH": 10.0}       # 목표 수익률 %
-        self.DEFAULT_COMPOUND = {"BTC": 70.0,     "ETH": 70.0}       # 복리율 %
+        self.DEFAULT_SEED     = {"BTC": 500000.0, "ETH": 500000.0}
+        self.DEFAULT_SPLIT    = {"BTC": 20.0,     "ETH": 20.0}
+        self.DEFAULT_TARGET   = {"BTC": 8.0,      "ETH": 10.0}
         self.DEFAULT_VERSION  = {"BTC": "V14",    "ETH": "V14"}
 
         for f in self.FILES.values():
@@ -120,7 +122,7 @@ class CryptoConfigManager:
         self._save_json(self.FILES["TICKER"], tickers)
 
     # ─────────────────────────────────────────────────────────
-    # 시드 / 분할 / 목표 수익률 / 복리율
+    # 시드 / 분할 / 목표 수익률
     # ─────────────────────────────────────────────────────────
     def get_seed(self, ticker: str) -> float:
         d = self._load_json(self.FILES["SEED_CFG"], {})
@@ -150,7 +152,7 @@ class CryptoConfigManager:
         self._save_json(self.FILES["SPLIT_CFG"], d)
 
     # ─────────────────────────────────────────────────────────
-    # 버전 / 모드
+    # 버전
     # ─────────────────────────────────────────────────────────
     def get_version(self, ticker: str) -> str:
         d = self._load_json(self.FILES["VERSION_CFG"], {})
@@ -162,7 +164,7 @@ class CryptoConfigManager:
         self._save_json(self.FILES["VERSION_CFG"], d)
 
     def get_latest_version(self) -> str:
-        return VERSION_HISTORY[-1].split(" ")[0] if VERSION_HISTORY else "V1.0"
+        return VERSION_HISTORY[-1].split(" ")[0] if VERSION_HISTORY else "V2.0"
 
     # ─────────────────────────────────────────────────────────
     # 장부 (Ledger)
@@ -176,19 +178,18 @@ class CryptoConfigManager:
     def add_ledger(self, ticker: str, side: str, qty: float, price: float, note: str = ""):
         all_records = self._load_json(self.FILES["LEDGER"], [])
         all_records.append({
-            "ticker":    ticker,
-            "side":      side,       # "BUY" | "SELL"
-            "qty":       qty,
-            "price":     price,
+            "ticker":     ticker,
+            "side":       side,
+            "qty":        qty,
+            "price":      price,
             "krw_amount": qty * price,
-            "date":      datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "note":      note,
+            "date":       datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "note":       note,
         })
         self._save_json(self.FILES["LEDGER"], all_records)
 
     def clear_ledger(self, ticker: str):
         all_records = self._load_json(self.FILES["LEDGER"], [])
-        # 해당 종목 기록을 히스토리로 이관 후 삭제
         ticker_records = [r for r in all_records if r.get("ticker") == ticker]
         if ticker_records:
             history = self._load_json(self.FILES["HISTORY"], [])
@@ -199,28 +200,32 @@ class CryptoConfigManager:
 
     def get_position(self, ticker: str) -> dict:
         """
-        장부 기반 보유 포지션 계산.
+        장부 기반 보유 포지션 계산 (FIFO 기반)
         반환: {'qty': float, 'avg': float, 'total_invested': float}
         """
         records = self.get_ledger(ticker)
-        total_qty = 0.0
+        total_qty      = 0.0
         total_invested = 0.0
+
         for r in records:
-            qty = float(r.get("qty", 0.0))
+            qty   = float(r.get("qty", 0.0))
             price = float(r.get("price", 0.0))
+
             if r.get("side") == "BUY":
-                total_qty += qty
+                total_qty      += qty
                 total_invested += qty * price
+
             elif r.get("side") == "SELL":
                 if total_qty > 0:
-                    ratio = min(qty / total_qty, 1.0)
-                    total_invested -= total_invested * ratio
+                    sell_ratio = min(qty / total_qty, 1.0)
+                    total_invested = total_invested * (1.0 - sell_ratio)
                 total_qty = max(0.0, total_qty - qty)
+
         avg = (total_invested / total_qty) if total_qty > 0 else 0.0
-        return {"qty": total_qty, "avg": avg, "total_invested": total_invested}
+        return {"qty": round(total_qty, 8), "avg": round(avg, 0), "total_invested": round(total_invested, 0)}
 
     # ─────────────────────────────────────────────────────────
-    # 거래 잠금 (중복 주문 방지)
+    # 거래 잠금
     # ─────────────────────────────────────────────────────────
     def get_trade_lock(self, ticker: str) -> bool:
         d = self._load_json(self.FILES["LOCKS"], {})
@@ -235,7 +240,7 @@ class CryptoConfigManager:
         self._save_json(self.FILES["LOCKS"], {})
 
     # ─────────────────────────────────────────────────────────
-    # 리버스(V-REV) 모드
+    # 리버스 모드
     # ─────────────────────────────────────────────────────────
     def get_reverse_state(self, ticker: str) -> dict:
         d = self._load_json(self.FILES["REVERSE_CFG"], {})
@@ -243,15 +248,11 @@ class CryptoConfigManager:
 
     def set_reverse_state(self, ticker: str, is_active: bool, day_count: int = 0, trigger_price: float = 0.0):
         d = self._load_json(self.FILES["REVERSE_CFG"], {})
-        d[ticker] = {
-            "is_active":     is_active,
-            "day_count":     day_count,
-            "trigger_price": trigger_price,
-        }
+        d[ticker] = {"is_active": is_active, "day_count": day_count, "trigger_price": trigger_price}
         self._save_json(self.FILES["REVERSE_CFG"], d)
 
     # ─────────────────────────────────────────────────────────
-    # AVWAP 하이브리드 상태
+    # AVWAP 상태
     # ─────────────────────────────────────────────────────────
     def get_avwap_state(self, ticker: str) -> dict:
         d = self._load_json(self.FILES["AVWAP_CFG"], {})
@@ -275,7 +276,7 @@ class CryptoConfigManager:
         return state["is_enabled"]
 
     # ─────────────────────────────────────────────────────────
-    # 히스토리 (명예의 전당)
+    # 히스토리
     # ─────────────────────────────────────────────────────────
     def get_history(self) -> list:
         return self._load_json(self.FILES["HISTORY"], [])
