@@ -166,7 +166,7 @@ async def scheduled_regular_trade(context):
                 async with tx_lock:
                     result = await asyncio.to_thread(broker.sell_market, ticker, sell_qty)
 
-                if result.get("status") == "0000":
+                if broker.is_ok(result):
                     avg = pos['avg']
                     realized     = (curr_p - avg) * sell_qty if avg > 0 else 0
                     realized_pct = (curr_p - avg) / avg * 100 if avg > 0 else 0
@@ -199,7 +199,7 @@ async def scheduled_regular_trade(context):
                         broker.buy_limit, ticker, avg_buy_price, avg_buy_qty
                     )
 
-                if result.get("status") == "0000":
+                if broker.is_ok(result):
                     cfg.set_trade_lock(ticker, True)
                     cfg.add_ledger(
                         ticker, "BUY", avg_buy_qty, avg_buy_price,
@@ -267,7 +267,7 @@ async def scheduled_profit_monitor(context):
                 async with tx_lock:
                     result = await asyncio.to_thread(broker.sell_market, ticker, qty)
 
-                if result.get("status") == "0000":
+                if broker.is_ok(result):
                     realized     = (curr_p - avg) * qty
                     realized_pct = (curr_p - avg) / avg * 100
 
@@ -335,7 +335,7 @@ async def scheduled_sniper_monitor(context):
                     result = await asyncio.to_thread(
                         broker.buy_market, ticker, decision['qty'] * curr_p
                     )
-                if result.get("status") == "0000":
+                if broker.is_ok(result):
                     import datetime as _dt
                     new_state = {
                         **avwap_state,
@@ -356,7 +356,7 @@ async def scheduled_sniper_monitor(context):
             elif decision['action'] == 'SELL' and avwap_qty > 0:
                 async with tx_lock:
                     result = await asyncio.to_thread(broker.sell_market, ticker, avwap_qty)
-                if result.get("status") == "0000":
+                if broker.is_ok(result):
                     realized     = (curr_p - avwap_avg) * avwap_qty
                     realized_pct = (curr_p - avwap_avg) / avwap_avg * 100 if avwap_avg > 0 else 0
                     new_state    = {**avwap_state, "qty": 0.0, "avg_price": 0.0, "entry_time": ""}
