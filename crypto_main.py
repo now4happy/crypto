@@ -149,30 +149,29 @@ def main():
                 name=f"token_check_{hh}h",
             )
 
-        # 일일 초기화: 09:00 KST
+        # 거래 잠금 해제 + 변동성 브리핑: 06:00 KST
         jq.run_daily(
             scheduled_force_reset,
-            time=datetime.time(9, 0, tzinfo=kst),
+            time=datetime.time(6, 0, tzinfo=kst),
             days=tuple(range(7)),
             chat_id=chat_id,
             data=app_data,
             name="force_reset",
         )
 
-        # 변동성 브리핑: 10:00 KST
         jq.run_daily(
             scheduled_volatility_scan,
-            time=datetime.time(10, 0, tzinfo=kst),
+            time=datetime.time(6, 0, tzinfo=kst),
             days=tuple(range(7)),
             chat_id=chat_id,
             data=app_data,
             name="volatility_scan",
         )
 
-        # 정규 매매: 10:05 KST
+        # 일일 매수: 06:05 KST (새출발=시장가, 보유중=지정가)
         jq.run_daily(
             scheduled_regular_trade,
-            time=datetime.time(10, 5, tzinfo=kst),
+            time=datetime.time(6, 5, tzinfo=kst),
             days=tuple(range(7)),
             chat_id=chat_id,
             data=app_data,
