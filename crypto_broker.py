@@ -104,32 +104,52 @@ class BithumbBroker:
     # 응답: [{"currency":"KRW","balance":"100000","locked":"0","avg_buy_price":"0"}, ...]
     # ─────────────────────────────────────────────────────────
     def get_account_balance(self) -> tuple:
+        """
+        전체 계좌 잔고 조회 - GET /v1/accounts
+        응답: [{"currency":"KRW","balance":"100000","locked":"0","avg_buy_price":"0"}, ...]
+        """
         data = self._private_get("/v1/accounts")
         krw_balance = 0.0
         holdings    = {}
 
+        # ── 정상 응답: list ───────────────────────────────────
         if isinstance(data, list):
             for item in data:
-                currency = item.get("currency", "").upper()
-                balance  = float(item.get("balance", 0.0))
-                locked   = float(item.get("locked",  0.0))
-                avg      = float(item.get("avg_buy_price", 0.0))
+                try:
+                    currency = item.get("currency", "").upper()
+                    balance  = float(item.get("balance", 0) or 0)
+                    locked   = float(item.get("locked",  0) or 0)
+                    avg      = float(item.get("avg_buy_price", 0) or 0)
 
-                if currency == "KRW":
-                    krw_balance = balance
-                    logging.info(f"💵 [Broker] KRW 가용: {krw_balance:,.0f}원 | 잠금: {locked:,.0f}원")
-                elif balance > 0 or locked > 0:
-                    holdings[currency] = {"qty": balance + locked, "avg": avg}
-                    logging.info(f"🪙 [Broker] {currency}: {balance+locked:.8f}개 | 평단: {avg:,.0f}원")
+                    if currency == "KRW":
+                        krw_balance = balance
+                        logging.info(f"💵 [Broker] KRW 가용: {krw_balance:,.0f}원 | 잠금: {locked:,.0f}원")
+                    elif balance > 0 or locked > 0:
+                        holdings[currency] = {"qty": balance + locked, "avg": avg}
+                        logging.info(f"🪙 [Broker] {currency}: {balance+locked:.8f}개 | 평단: {avg:,.0f}원")
+                except Exception as e:
+                    logging.warning(f"⚠️ [Broker] 잔고 항목 파싱 실패: {item} → {e}")
+
+            if krw_balance == 0.0 and not holdings:
+                logging.warning("⚠️ [Broker] 잔고 응답은 왔지만 KRW/코인 모두 0 — 계좌 잔고 또는 API 권한을 확인하세요")
+
+        # ── 오류 응답: dict ───────────────────────────────────
         else:
-            err = data.get("error", {}) if isinstance(data, dict) else {}
-            err_name = err.get("name", "")
-            err_msg  = err.get("message", "")
+            err      = data.get("error", {}) if isinstance(data, dict) else {}
+            err_name = str(err.get("name", ""))
+            err_msg  = str(err.get("message", ""))
             logging.error(f"❌ [Broker] 잔고 조회 실패: {err_name} - {err_msg}")
+
             if "NotAllowIP" in err_name or "NotAllowIP" in err_msg:
-                logging.error("🚨 빗썸 API 관리 페이지에서 이 서버의 IP를 화이트리스트에 추가하세요!")
-            elif "401" in str(err_name):
-                logging.error("🚨 API KEY 또는 SECRET KEY가 잘못되었습니다! .env 파일을 확인하세요.")
+                logging.error("🚨 [해결] 빗썸 API 관리 → IP 화이트리스트에 서버 IP 추가!")
+                logging.error("🔍 서버 IP 확인 명령어: curl ifconfig.me")
+            elif "invalid_access_key" in err_name or "401" in err_name:
+                logging.error("🚨 [해결] API KEY 오류 — 빗썸 API 2.0 키인지 확인!")
+                logging.error(f"🔍 현재 KEY 앞 10자리: {self.api_key[:10] if self.api_key else 'None'}")
+            elif "invalid_secret_key" in err_name:
+                logging.error("🚨 [해결] SECRET KEY 오류 — .env.bithumb 파일을 확인하세요!")
+            else:
+                logging.error(f"🚨 알 수 없는 오류: {data}")
 
         return krw_balance, holdings
 

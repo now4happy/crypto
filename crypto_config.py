@@ -21,18 +21,22 @@ VERSION_HISTORY = [
 
 class CryptoConfigManager:
     def __init__(self):
+        # ✅ 절대경로: 이 파일이 있는 폴더 기준으로 data/ 생성
+        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+        DATA_DIR = os.path.join(BASE_DIR, "data")
+
         self.FILES = {
-            "CHAT_ID":      "data/chat_id.dat",
-            "LEDGER":       "data/ledger.json",
-            "HISTORY":      "data/history.json",
-            "SPLIT_CFG":    "data/split_config.json",
-            "TICKER":       "data/active_tickers.json",
-            "SEED_CFG":     "data/seed_config.json",
-            "VERSION_CFG":  "data/version_config.json",
-            "REVERSE_CFG":  "data/reverse_config.json",
-            "LOCKS":        "data/trade_locks.json",
-            "AVWAP_CFG":    "data/avwap_hybrid.json",
-            "QUEUE_LEDGER": "data/queue_ledger.json",
+            "CHAT_ID":      os.path.join(DATA_DIR, "chat_id.dat"),
+            "LEDGER":       os.path.join(DATA_DIR, "ledger.json"),
+            "HISTORY":      os.path.join(DATA_DIR, "history.json"),
+            "SPLIT_CFG":    os.path.join(DATA_DIR, "split_config.json"),
+            "TICKER":       os.path.join(DATA_DIR, "active_tickers.json"),
+            "SEED_CFG":     os.path.join(DATA_DIR, "seed_config.json"),
+            "VERSION_CFG":  os.path.join(DATA_DIR, "version_config.json"),
+            "REVERSE_CFG":  os.path.join(DATA_DIR, "reverse_config.json"),
+            "LOCKS":        os.path.join(DATA_DIR, "trade_locks.json"),
+            "AVWAP_CFG":    os.path.join(DATA_DIR, "avwap_hybrid.json"),
+            "QUEUE_LEDGER": os.path.join(DATA_DIR, "queue_ledger.json"),
         }
 
         self.DEFAULT_SEED     = {"BTC": 500000.0, "ETH": 500000.0}

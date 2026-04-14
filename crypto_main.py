@@ -30,10 +30,13 @@ from crypto_scheduler import (
     scheduled_volatility_scan,
 )
 
+# ✅ 파일 위치 기준 절대경로 설정 (어디서 실행해도 bithumb_bot 폴더 안에 생성)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 for d in ['data', 'logs']:
-    os.makedirs(d, exist_ok=True)
+    os.makedirs(os.path.join(BASE_DIR, d), exist_ok=True)
 
-load_dotenv()
+# ✅ .env.bithumb 파일 로드 (한국투자 .env와 분리)
+load_dotenv(dotenv_path=os.path.join(BASE_DIR, '.env.bithumb'))
 
 TELEGRAM_TOKEN     = os.getenv("TELEGRAM_TOKEN")
 BITHUMB_API_KEY    = os.getenv("BITHUMB_API_KEY")
@@ -49,7 +52,7 @@ if not all([TELEGRAM_TOKEN, BITHUMB_API_KEY, BITHUMB_API_SECRET]):
     print("   필요: TELEGRAM_TOKEN, ADMIN_CHAT_ID, BITHUMB_API_KEY, BITHUMB_API_SECRET")
     exit(1)
 
-log_filename = f"logs/crypto_bot_{datetime.datetime.now().strftime('%Y%m%d')}.log"
+log_filename = os.path.join(BASE_DIR, f"logs/crypto_bot_{datetime.datetime.now().strftime('%Y%m%d')}.log")
 logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s',
     level=logging.INFO,
