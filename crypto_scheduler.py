@@ -162,7 +162,10 @@ async def scheduled_regular_trade(context):
 
             # ── 익절 조건 먼저 체크 ──────────────────────────
             if action == 'SELL':
-                sell_qty = plan.get('star_sell_qty', qty)
+                # ✅ API 실제 보유량으로 전량 매도 (잔량 dust 방지)
+                _, holdings = await asyncio.to_thread(broker.get_account_balance)
+                api_qty  = holdings.get(ticker, {}).get("qty", 0.0)
+                sell_qty = api_qty if api_qty > 0 else qty
                 if sell_qty <= 0:
                     continue
 
@@ -170,9 +173,9 @@ async def scheduled_regular_trade(context):
                     result = await asyncio.to_thread(broker.sell_market, ticker, sell_qty)
 
                 if broker.is_ok(result):
-                    realized     = (curr_p - avg) * sell_qty if avg > 0 else 0
+                    realized     = (curr_p - avg) * qty if avg > 0 else 0
                     realized_pct = (curr_p - avg) / avg * 100 if avg > 0 else 0
-                    cfg.add_ledger(ticker, "SELL", sell_qty, curr_p, note="목표 익절 자동 매도")
+                    cfg.add_ledger(ticker, "SELL", sell_qty, curr_p, note="목표 익절 자동 매도 (API 실물수량)")
                     cfg.add_history(ticker, realized, realized_pct, note="무한매수법 목표 수익률 달성")
                     cfg.set_trade_lock(ticker, False)
                     msg = (
@@ -297,7 +300,8 @@ async def scheduled_regular_trade(context):
 async def scheduled_profit_monitor(context):
     """
     60초마다: 목표가 달성 여부 감시
-    → 달성 시 즉시 전량 시장가 익절 → 장부 초기화 → 내일 새출발
+    → 달성 시 API 실제 보유량 기준으로 전량 시장가 익절 (잔량 dust 방지)
+    → 장부 초기화 → 내일 새출발
     """
     app_data = context.job.data
     cfg      = app_data['cfg']
@@ -322,28 +326,41 @@ async def scheduled_profit_monitor(context):
             if curr_p <= 0 or curr_p < target_price:
                 continue
 
-            # 목표가 달성 → 즉시 전량 시장가 매도
+            # ✅ 방법2: API 실제 보유량으로 전량 매도 (잔량 dust 방지)
+            _, holdings = await asyncio.to_thread(broker.get_account_balance)
+            api_qty = holdings.get(ticker, {}).get("qty", 0.0)
+
+            # API 수량이 있으면 API 기준, 없으면 장부 기준으로 fallback
+            sell_qty = api_qty if api_qty > 0 else qty
+            if sell_qty <= 0:
+                continue
+
             async with tx_lock:
-                result = await asyncio.to_thread(broker.sell_market, ticker, qty)
+                result = await asyncio.to_thread(broker.sell_market, ticker, sell_qty)
 
             if broker.is_ok(result):
-                realized     = (curr_p - avg) * qty
+                realized     = (curr_p - avg) * qty   # 손익은 장부 기준
                 realized_pct = (curr_p - avg) / avg * 100
 
-                cfg.add_ledger(ticker, "SELL", qty, curr_p, note="실시간 목표가 익절")
+                cfg.add_ledger(ticker, "SELL", sell_qty, curr_p, note="실시간 목표가 익절 (API 실물수량)")
                 cfg.add_history(ticker, realized, realized_pct, note="실시간 익절 모니터")
-                cfg.set_trade_lock(ticker, False)   # 잠금 해제 → 내일 새출발
+                cfg.set_trade_lock(ticker, False)
+
+                dust_note = ""
+                if abs(api_qty - qty) > 0.000001:
+                    dust_note = f"\n▫️ 잔량 처리: 장부 {qty:.8f} → 실물 {api_qty:.8f}개 전량 매도"
 
                 msg = (
                     f"🎉 <b>[{ticker}] 익절 완료!</b>\n"
                     f"▫️ 체결가: <b>{curr_p:,.0f}원</b>\n"
                     f"▫️ 평단가: {avg:,.0f}원\n"
                     f"▫️ 실현손익: <b>{realized:+,.0f}원 ({realized_pct:+.2f}%)</b>\n"
-                    f"▫️ 수량: {qty:.8f}개\n"
+                    f"▫️ 매도 수량: {sell_qty:.8f}개"
+                    f"{dust_note}\n"
                     f"✨ 장부 초기화 완료 — 내일 06:05 새출발!"
                 )
                 await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML')
-                logging.info(f"🎉 [{ticker}] 익절: {realized:+,.0f}원 ({realized_pct:+.2f}%)")
+                logging.info(f"🎉 [{ticker}] 익절: {realized:+,.0f}원 | API수량: {api_qty:.8f} / 장부수량: {qty:.8f}")
 
         except Exception as e:
             logging.error(f"❌ [{ticker}] 익절 모니터 에러: {e}")
